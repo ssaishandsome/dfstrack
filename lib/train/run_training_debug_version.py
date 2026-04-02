@@ -85,8 +85,8 @@ def main():
     master_port = 28200
     parser = argparse.ArgumentParser(description='Run a train scripts in train_settings.')
     # for train
-    parser.add_argument('--script', type=str,default='atctrack', help='training script name')
-    parser.add_argument('--config', type=str, default='atctrack_base', help='yaml configure file name')
+    parser.add_argument('--script', type=str,default='dfstrack', help='training script name')
+    parser.add_argument('--config', type=str, default='dfstrack_base', help='yaml configure file name')
 
     parser.add_argument('--save_dir', type=str, default='/home/xkfeng/Python_proj/bat',help='root directory to save checkpoints, logs, and tensorboard')
 

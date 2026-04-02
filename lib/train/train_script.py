@@ -2,7 +2,6 @@ import os
 # loss function related
 from lib.utils.box_ops import giou_loss
 from torch.nn.functional import l1_loss
-from torch.nn import BCEWithLogitsLoss
 # train pipeline related
 from lib.train.trainers import LTRTrainer
 # distributed training related
@@ -10,10 +9,9 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 # some more advanced functions
 from .base_functions import *
 # network related
-from lib.models.atctrack import build_atctrack
-from lib.models.atctrack import build_atctrack
+from lib.models.dfstrack import build_dfstrack
 # forward propagation related
-from lib.train.actors import ATCTrackActor
+from lib.train.actors import DFSTrackActor
 # for import modules
 import importlib
 
@@ -21,7 +19,7 @@ from ..utils.focal_loss import FocalLoss
 
 
 def run(settings):
-    settings.description = 'Training script for atctrack'
+    settings.description = 'Training script for visual-language tracking'
 
     # update the default configs with config file
     if not os.path.exists(settings.cfg_file):
@@ -54,8 +52,8 @@ def run(settings):
 
 
     # Create network
-    if settings.script_name == "atctrack":
-        net = build_atctrack(cfg)
+    if settings.script_name == "dfstrack":
+        net = build_dfstrack(cfg)
     else:
         raise ValueError("illegal script name")
 
@@ -71,11 +69,11 @@ def run(settings):
     settings.distill = getattr(cfg.TRAIN, "DISTILL", False)
     settings.distill_loss_type = getattr(cfg.TRAIN, "DISTILL_LOSS_TYPE", "KL")
     # Loss functions and Actors
-    if settings.script_name == "atctrack":
+    if settings.script_name == "dfstrack":
         focal_loss = FocalLoss()
-        objective = {'giou': giou_loss, 'l1': l1_loss, 'focal': focal_loss, 'cls': BCEWithLogitsLoss()}
-        loss_weight = {'giou': cfg.TRAIN.GIOU_WEIGHT, 'l1': cfg.TRAIN.L1_WEIGHT, 'focal': 1., 'cls': 1.0}
-        actor = ATCTrackActor(net=net, objective=objective, loss_weight=loss_weight, settings=settings, cfg=cfg)
+        objective = {'giou': giou_loss, 'l1': l1_loss, 'focal': focal_loss}
+        loss_weight = {'giou': cfg.TRAIN.GIOU_WEIGHT, 'l1': cfg.TRAIN.L1_WEIGHT, 'focal': 1.}
+        actor = DFSTrackActor(net=net, objective=objective, loss_weight=loss_weight, settings=settings, cfg=cfg)
     else:
         raise ValueError("illegal script name")
 

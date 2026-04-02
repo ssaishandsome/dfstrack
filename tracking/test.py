@@ -56,12 +56,12 @@ def run_tracker(tracker_name, tracker_param, run_id=None, dataset_name='otb', se
 def main():
     os.environ['CUDA_VISIBLE_DEVICES'] = "0"
     parser = argparse.ArgumentParser(description='Run tracker on sequence or dataset.')
-    parser.add_argument('--tracker_name', type=str, default="atctrack", help='Name of tracking method.')
-    parser.add_argument('--tracker_param', type=str, default="atctrack_base", help='Name of config file.')    # atctrack_base  atctrack_large
+    parser.add_argument('--tracker_name', type=str, default="dfstrack", help='Name of tracking method.')
+    parser.add_argument('--tracker_param', type=str, default="dfstrack_base", help='Name of config file.')
     parser.add_argument('--runid', type=int, default=None, help='The run id.')
     parser.add_argument('--dataset_name', type=str, default="tnl2k", help='Name of dataset (lasot_lang , tnl2k, otb99_lang, lasot_extension_subset_lang, videocube_test_tiny).')
-    parser.add_argument('--ckpt_path', type=str, default="./ATCTrack_b.pth.tar",
-                        help='Name of dataset (lasot_lang , tnl2k, otb99_lang, lasot_extension_subset_lang, videocube_test_tiny).')
+    parser.add_argument('--ckpt_path', type=str, default="./DFSTrack_ep0180.pth.tar",
+                        help='Path to the DFSTrack checkpoint.')
 
     parser.add_argument('--sequence', type=str, default=None, help='Sequence number or name.')
     parser.add_argument('--debug', type=int, default=0, help='Debug level.')

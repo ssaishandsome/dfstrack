@@ -25,7 +25,7 @@ from functools import partial
 import torch.utils.checkpoint as checkpoint
 from timm.models.vision_transformer import DropPath, Mlp, trunc_normal_
 from timm.models.layers import to_2tuple
-from lib.models.aqatrack.base_backbone import BaseBackbone
+from lib.models.backbones.base_backbone import BaseBackbone
 
 class Attention(nn.Module):
     def __init__(self, input_size, dim, num_heads, qkv_bias=True, qk_scale=None, 

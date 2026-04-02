@@ -9,7 +9,7 @@ class EnvironmentSettings:
         self.got10k_val_dir = './GOT-10k/data/val'
         self.got10k_lmdb_dir = './GOT-10k/data/train'
 
-        self.lasot_dir = './LaSOT/data'
+        self.lasot_dir = '/mnt/Data/Lasot/images'
         self.lasot_lmdb_dir = './LaSOT/data'
 
         self.trackingnet_dir = './TrackingNet'

@@ -21,7 +21,7 @@ from timm.models.layers import to_2tuple, drop_path, trunc_normal_
 
 from torch import Tensor, Size
 from typing import Union, List
-from lib.models.aqatrack.base_backbone import BaseBackbone
+from lib.models.backbones.base_backbone import BaseBackbone
 
 
 def _cfg(url='', **kwargs):

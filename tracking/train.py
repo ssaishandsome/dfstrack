@@ -10,10 +10,10 @@ def parse_args():
     """
     parser = argparse.ArgumentParser(description='Parse args for training')
     # for train
-    parser.add_argument('--script', type=str,  default='atctrack', help='training script name')
+    parser.add_argument('--script', type=str,  default='dfstrack', help='training script name')
     parser.add_argument('--config', type=str, help='yaml configure file name')
     parser.add_argument('--save_dir', type=str, default='./output', help='root directory to save checkpoints, logs, and tensorboard')
-    parser.add_argument('--mode', type=str, choices=["single", "multiple", "multi_node"], default="multiple",
+    parser.add_argument('--mode', type=str, choices=["single", "multiple", "multi_node"], default="single",
                         help="train on single gpu or multiple gpus")
     parser.add_argument('--nproc_per_node', type=int, default=torch.cuda.device_count(), help="number of GPUs per node")  # specify when mode is multiple
     parser.add_argument('--use_lmdb', type=int, choices=[0, 1], default=0)  # whether datasets are in lmdb format

@@ -1,0 +1,35 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Editor / IDE
+.vscode/
+.idea/
+
+# Environment
+.env
+.conda/
+.venv/
+venv/
+
+# Logs
+*.log
+
+# Training outputs
+output/
+tensorboard/
+runs/
+
+# Checkpoints and weights
+*.pth
+*.pth.tar
+*.pt
+*.ckpt
+*.bin
+*.safetensors
+
+# Local pretrained models
+resource/pretrained_models/
+
+# OS files
+.DS_Store
