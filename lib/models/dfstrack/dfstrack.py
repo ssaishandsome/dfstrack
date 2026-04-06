@@ -9,6 +9,7 @@ from lib.models.backbones.fast_itpn import (
     fast_itpn_base_3324_patch16_224,
     fast_itpn_large_2240_patch16_256,
 )
+from lib.models.dfstrack.semantic_slot import SemanticSlotTracker
 from lib.models.layers.head import build_box_head
 from lib.utils.box_ops import box_xyxy_to_cxcywh
 from lib.utils.misc import NestedTensor
@@ -17,7 +18,7 @@ from lib.utils.misc import NestedTensor
 class DFSTrack(nn.Module):
     """A clean visual-language tracking baseline with shared visual/text encoders."""
 
-    def __init__(self, backbone, box_head, tokenizer, text_encoder, head_type="CENTER", dim=512):
+    def __init__(self, backbone, box_head, tokenizer, text_encoder, head_type="CENTER", dim=512, cfg=None):
         super().__init__()
         self.backbone = backbone
         self.box_head = box_head
@@ -25,6 +26,7 @@ class DFSTrack(nn.Module):
         self.text_encoder = text_encoder
         self.head_type = head_type
         self.dim = dim
+        self.cfg = cfg
 
         if head_type in ["CORNER", "CENTER"]:
             self.feat_sz_s = int(box_head.feat_sz)
@@ -36,29 +38,183 @@ class DFSTrack(nn.Module):
             nn.LayerNorm(self.dim, eps=1e-12),
             nn.Dropout(0.1),
         )
-        self.text_gate = nn.Sequential(
-            nn.Linear(self.dim, self.dim),
-            nn.GELU(),
-            nn.Linear(self.dim, self.dim),
-            nn.Sigmoid(),
-        )
 
-    def forward_backbone(self, template, search, soft_token_template_mask, x_pos):
-        template = [template[:, :3], template[:, 3:]]
-        soft_token_template_mask = [
-            soft_token_template_mask[:, :64],
-            soft_token_template_mask[:, 64:],
-        ]
+        dfs_cfg = getattr(cfg.MODEL, "DFS", None) if cfg is not None else None
+        self.dfs_enabled = bool(getattr(dfs_cfg, "ENABLED", True))
+        if self.dfs_enabled:
+            self.slot_pos_embed = nn.Parameter(torch.zeros(1, dfs_cfg.NUM_SLOTS, self.dim))
+            nn.init.trunc_normal_(self.slot_pos_embed, std=0.02)
+            self.semantic_slots = SemanticSlotTracker(
+                num_slots=dfs_cfg.NUM_SLOTS,
+                dim=self.dim,
+                num_heads=getattr(dfs_cfg, "NUM_HEADS", 8),
+                hidden_dim=dfs_cfg.FUSION_HIDDEN_DIM,
+                reliability_hidden_dim=dfs_cfg.RELIABILITY_HIDDEN_DIM,
+                attn_drop=getattr(dfs_cfg, "ATTN_DROPOUT", 0.0),
+                proj_drop=getattr(dfs_cfg, "PROJ_DROPOUT", 0.0),
+            )
 
-        x, _ = self.backbone.forward_features_pe(
-            z=template,
+    def _split_backbone_tokens(self, tokens: torch.Tensor, template_token_lengths):
+        if tokens.dim() != 3:
+            raise ValueError(f"tokens must have shape [B, L, C], got {tuple(tokens.shape)}")
+
+        template_tokens = []
+        start = 0
+        for length in template_token_lengths:
+            end = start + length
+            template_tokens.append(tokens[:, start:end])
+            start = end
+        search_tokens = tokens[:, start:]
+        return template_tokens, search_tokens
+
+    def forward_backbone_enc12(self, template, search, soft_token_template_mask):
+        if not isinstance(template, (list, tuple)) or len(template) == 0:
+            raise ValueError("template must be a non-empty list or tuple of template images")
+        if len(template) != len(soft_token_template_mask):
+            raise ValueError("template and soft_token_template_mask must have the same length")
+
+        template_images = list(template)
+        template_masks = list(soft_token_template_mask)
+        tokens, _ = self.backbone.forward_features_pe(
+            z=template_images,
             x=search,
-            soft_token_template_mask=soft_token_template_mask,
+            soft_token_template_mask=template_masks,
         )
-        x, aux_dict = self.backbone.forward_features_stage3(x, None, x_pos)
-        return x, aux_dict
+        template_tokens, search_tokens = self._split_backbone_tokens(
+            tokens=tokens,
+            template_token_lengths=[mask.shape[1] for mask in template_masks],
+        )
+        return template_tokens, search_tokens
 
-    def forward_text(self, captions, num_search, device):
+    def _build_stage3_pos_embed(self, batch_size: int, num_slot_tokens: int = 0):
+        cls_prompts_pos = self.cls_prompts_pos.weight.unsqueeze(0)
+        pos_chunks = [cls_prompts_pos]
+
+        if num_slot_tokens > 0:
+            if not self.dfs_enabled:
+                raise ValueError("Slot positional embeddings require DFS to be enabled")
+            if num_slot_tokens != self.slot_pos_embed.shape[1]:
+                raise ValueError("num_slot_tokens must match the configured number of semantic slots")
+            pos_chunks.append(self.slot_pos_embed)
+
+        pos_chunks.extend([self.backbone.pos_embed_z, self.backbone.pos_embed_x])
+        return torch.cat(pos_chunks, dim=1).repeat(batch_size, 1, 1)
+
+    def forward_backbone_stage3(self, token_groups, x_pos, return_last_attn=False):
+        tokens = torch.cat(token_groups, dim=1)
+        return self.backbone.forward_features_stage3(
+            tokens,
+            None,
+            x_pos,
+            return_last_attn=return_last_attn,
+        )
+
+    def _split_stage3_outputs(
+        self,
+        tokens: torch.Tensor,
+        num_slot_tokens: int,
+        num_template_tokens: int,
+    ):
+        if tokens.dim() != 3:
+            raise ValueError(f"tokens must have shape [B, L, C], got {tuple(tokens.shape)}")
+
+        cursor = 1  # skip cls token
+        slot_tokens = tokens[:, cursor:cursor + num_slot_tokens]
+        cursor += num_slot_tokens
+        template_tokens = tokens[:, cursor:cursor + num_template_tokens]
+        cursor += num_template_tokens
+        search_tokens = tokens[:, cursor:]
+        return slot_tokens, template_tokens, search_tokens
+
+    def _extract_slot_search_attention(
+        self,
+        attn: torch.Tensor,
+        num_slot_tokens: int,
+        num_template_tokens: int,
+        num_search_tokens: int,
+    ):
+        if attn is None:
+            raise ValueError("Stage-3 attention is required to compute slot reliability")
+        if attn.dim() != 4:
+            raise ValueError(f"attn must have shape [B, H, N, N], got {tuple(attn.shape)}")
+
+        attn_mean = attn.mean(dim=1)
+        slot_start = 1
+        slot_end = slot_start + num_slot_tokens
+        search_start = slot_end + num_template_tokens
+        search_end = search_start + num_search_tokens
+        return attn_mean[:, slot_start:slot_end, search_start:search_end]
+
+    def _run_dfs_branch(
+        self,
+        template_tokens: torch.Tensor,
+        search_tokens: torch.Tensor,
+        text_features: NestedTensor,
+        dfs_state: dict,
+    ):
+        slot_prior, init_aux = self.semantic_slots.initialize_slots(
+            text_tokens=text_features.tensors,
+            text_mask=text_features.mask,
+        ) # 生成模板约束后的语义槽
+        template_slots, template_aux = self.semantic_slots.constrain_slots(
+            slot_prior=slot_prior,
+            template_tokens=template_tokens,
+        )
+        # 为语义槽也构建位置编码，目前顺序为：cls token - slot tokens - template tokens - search tokens
+        stage3_pos = self._build_stage3_pos_embed(
+            batch_size=search_tokens.shape[0],
+            num_slot_tokens=template_slots.shape[1],
+        )
+        stage3_tokens, stage3_aux = self.forward_backbone_stage3(
+            token_groups=[template_slots, template_tokens, search_tokens],
+            x_pos=stage3_pos,
+            return_last_attn=True,
+        )
+        slot_candidate, stage3_template_tokens, stage3_search_tokens = self._split_stage3_outputs(
+            stage3_tokens,
+            num_slot_tokens=template_slots.shape[1],
+            num_template_tokens=template_tokens.shape[1],
+        ) # 选择出slot对应搜索图像特征对应的注意力分数
+        slot_attention = self._extract_slot_search_attention(
+            attn=stage3_aux["attn"],
+            num_slot_tokens=template_slots.shape[1],
+            num_template_tokens=template_tokens.shape[1],
+            num_search_tokens=search_tokens.shape[1],
+        )
+        corrected_slots, correction_aux = self.semantic_slots.correct_slots(
+            template_slots=template_slots,
+            slot_candidate=slot_candidate, # 经过stage-3融合后的slot特征
+            slot_attention=slot_attention,
+        )
+        enhanced_search_tokens, modulation_aux = self.semantic_slots.modulate_search(
+            search_tokens=stage3_search_tokens,
+            corrected_slots=corrected_slots,
+        )
+
+        dfs_state = dfs_state if isinstance(dfs_state, dict) else {}
+        dfs_state["slot_state"] = correction_aux["slot_state"].detach()
+
+        extras = {
+            "slot_prior": slot_prior,
+            "slot_template": template_slots,
+            "slot_candidate": correction_aux["slot_candidate"],
+            "slot_state": correction_aux["slot_state"],
+            "slot_attention": correction_aux["slot_attention"],
+            "slot_assignment": correction_aux["slot_assignment"],
+            "slot_reliability": correction_aux["slot_reliability"],
+            "slot_focus": correction_aux["slot_focus"],
+            "slot_similarity": correction_aux["slot_similarity"],
+            "text_slot_attention": init_aux["text_slot_attention"],
+            "template_slot_attention": template_aux["template_slot_attention"],
+            "search_slot_attention": modulation_aux["search_slot_attention"],
+            "stage3_attn": stage3_aux["attn"],
+            "stage3_backbone_feat": stage3_tokens,
+            "stage3_template_feat": stage3_template_tokens,
+            "stage3_search_feat": stage3_search_tokens,
+        }
+        return enhanced_search_tokens, extras, dfs_state
+
+    def forward_text(self, captions, device):
         tokenized = self.tokenizer.batch_encode_plus(
             captions,
             padding="longest",
@@ -71,18 +227,7 @@ class DFSTrack(nn.Module):
 
         valid_mask = (~text_attention_mask).unsqueeze(-1).float()
         pooled_text = (text_features * valid_mask).sum(dim=1) / valid_mask.sum(dim=1).clamp(min=1.0)
-
-        text_features_t = []
-        text_attention_mask_t = []
-        pooled_text_t = []
-        for _ in range(num_search):
-            text_features_t.append(text_features)
-            text_attention_mask_t.append(text_attention_mask)
-            pooled_text_t.append(pooled_text)
-
-        text_features = NestedTensor(torch.cat(text_features_t, dim=0), torch.cat(text_attention_mask_t, dim=0))
-        pooled_text = torch.cat(pooled_text_t, dim=0)
-        return text_features, pooled_text
+        return NestedTensor(text_features, text_attention_mask), pooled_text
 
     def forward(
         self,
@@ -90,52 +235,64 @@ class DFSTrack(nn.Module):
         search,
         soft_token_template_mask=None,
         exp_str=None,
-        exp_subject_mask=None,
-        temporal_infor=None,
-        first_frame_flag=False,
+        cached_text_feat=None,
+        dfs_state=None,
         training=True,
     ):
-        del temporal_infor, first_frame_flag
+        if isinstance(search, (list, tuple)):
+            if len(search) != 1:
+                raise ValueError("DFSTrack forward only supports a single search image")
+            search = search[0]
 
-        b0, num_search = template[0].shape[0], len(search)
-        if training:
-            search = torch.cat(search, dim=0)
-            template = torch.cat(template, dim=1)
-            soft_token_template_mask = torch.cat(soft_token_template_mask, dim=1)
+        b0 = template[0].shape[0]
 
-            template_temporal = []
-            soft_token_template_mask_temporal = []
-            for _ in range(num_search):
-                template_temporal.append(template)
-                soft_token_template_mask_temporal.append(soft_token_template_mask)
-            template_temporal = torch.cat(template_temporal, dim=0)
-            soft_token_template_mask_temporal = torch.cat(soft_token_template_mask_temporal, dim=0)
-            # text_sentence_features 是每个文本的全局特征，text_features 是每个文本的token级别特征
-            text_features, text_sentence_features = self.forward_text(exp_str, num_search, device=search.device)
+        if training: # 返回的是文本特征以及掩码，_为池化后的文本特征
+            text_features, _ = self.forward_text(exp_str, device=search.device)
         else:
-            b0 = 1
-            template_temporal = torch.cat(template, dim=1)
-            soft_token_template_mask_temporal = torch.cat(soft_token_template_mask, dim=1)
             text_features = exp_str
-            text_sentence_features = exp_subject_mask
+            _ = cached_text_feat
 
-        cls_prompts_pos = self.cls_prompts_pos.weight.unsqueeze(0)
-        x_pos_0 = torch.cat([cls_prompts_pos, self.backbone.pos_embed_z, self.backbone.pos_embed_x], dim=1)
-        x_pos = x_pos_0.repeat(b0 * num_search, 1, 1)
-
-        x, aux_dict = self.forward_backbone(
-            template_temporal,
+        template_tokens_list, search_tokens = self.forward_backbone_enc12(
+            template,
             search,
-            soft_token_template_mask_temporal,
-            x_pos,
+            soft_token_template_mask,
         )
+        template_tokens = torch.cat(template_tokens_list, dim=1)
+        if template_tokens.shape[1] != self.backbone.pos_embed_z.shape[1]:
+            raise ValueError(
+                "Template token count does not match backbone positional embeddings. "
+                "Please keep cfg.DATA.TEMPLATE.NUMBER consistent with the actual number of templates."
+            )
 
-        search_tokens = x[:, -self.feat_len_s:]
-        # 句级文本向量去调制 search tokens
-        text_gate = self.text_gate(text_sentence_features).unsqueeze(1)
-        conditioned_search_tokens = search_tokens + search_tokens * text_gate + text_sentence_features.unsqueeze(1)
+        enhanced_search_tokens = search_tokens
+        extras = {}
+        backbone_feat = None
+        if self.dfs_enabled:
+            enhanced_search_tokens, extras, dfs_state = self._run_dfs_branch(
+                template_tokens=template_tokens,
+                search_tokens=search_tokens,
+                text_features=text_features,
+                dfs_state=dfs_state,
+            )
+            backbone_feat = extras["stage3_backbone_feat"]
+        elif not training:
+            dfs_state = dfs_state if isinstance(dfs_state, dict) else {}
+        else:
+            x_pos = self._build_stage3_pos_embed(batch_size=b0, num_slot_tokens=0)
+            backbone_feat, aux_dict = self.forward_backbone_stage3(
+                token_groups=[template_tokens, enhanced_search_tokens],
+                x_pos=x_pos,
+                return_last_attn=False,
+            )
+            enhanced_search_tokens = backbone_feat[:, -self.feat_len_s:]
 
-        opt_feat = conditioned_search_tokens.transpose(1, 2).contiguous().view(
+        if self.dfs_enabled:
+            aux_dict = {"attn": extras["stage3_attn"]}
+            search_tokens = enhanced_search_tokens
+        else:
+            search_tokens = enhanced_search_tokens
+
+        opt_feat = search_tokens.transpose(1, 2).contiguous().view(
             -1,
             self.dim,
             self.feat_sz_s,
@@ -144,8 +301,12 @@ class DFSTrack(nn.Module):
 
         out = self.forward_head(opt_feat)
         out.update(aux_dict)
-        out["backbone_feat"] = x
+        out["backbone_feat"] = backbone_feat
         out["text_feat"] = text_features.tensors
+        if self.dfs_enabled:
+            out.update(extras)
+        if not training:
+            out["dfs_state"] = dfs_state
         return out
 
     def forward_head(self, opt_feat, gt_score_map=None):
@@ -212,6 +373,7 @@ def build_dfstrack(cfg, training=True):
         text_encoder,
         head_type=cfg.MODEL.HEAD.TYPE,
         dim=hidden_dim,
+        cfg=cfg,
     )
 
     if cfg.MODEL.PRETRAINED_PATH and training:

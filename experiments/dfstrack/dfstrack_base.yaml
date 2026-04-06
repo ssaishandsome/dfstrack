@@ -9,7 +9,7 @@ DATA:
     FACTOR: 4.0
     SCALE_JITTER: 0.5
     SIZE: 256
-    NUMBER: 4
+    NUMBER: 1
   STD:
   - 0.229
   - 0.224
@@ -19,22 +19,22 @@ DATA:
     FACTOR: 2.0
     SCALE_JITTER: 0
     SIZE: 128
-    NUMBER: 2
+    NUMBER: 1
   TRAIN:
     DATASETS_NAME:
     - LASOT
-    # - GOT10K_vottrain
-    # - TRACKINGNET
-    # - VastTrack
-    # - TNL2K_train
+    - GOT10K_vottrain
+    - TRACKINGNET
+    - VastTrack
+    - TNL2K_train
     # - RefCOCO14
     # - OTB99_train
     DATASETS_RATIO:
     - 6
-    # - 6
-    # - 6
-    # - 6
-    # - 6
+    - 6
+    - 6
+    - 6
+    - 6
     # - 6
     # - 1
     SAMPLE_PER_EPOCH: 25000
@@ -44,6 +44,21 @@ MODEL:
   BACKBONE:
     TYPE: itpn_base
     STRIDE: 16
+  DFS:
+    ENABLED: true
+    NUM_SLOTS: 4
+    NUM_STABLE_SLOTS: 2
+    SLOT_TEMPERATURE: 0.8
+    NUM_HEADS: 8
+    ATTN_DROPOUT: 0.0
+    PROJ_DROPOUT: 0.0
+    TARGET_RADIUS: 0
+    CONTEXT_RADIUS: 1
+    RELIABILITY_HIDDEN_DIM: 256
+    FUSION_HIDDEN_DIM: 256
+    STABLE_ALPHA: 0.8
+    ADAPTIVE_ALPHA: 0.4
+    USE_FIXED_ALPHA: true
   HEAD:
     TYPE: CENTER
     NUM_CHANNELS: 256
@@ -51,10 +66,13 @@ MODEL:
 TRAIN:
   BACKBONE_MULTIPLIER: 0.1
   DROP_PATH_RATE: 0.1
-  BATCH_SIZE: 6
+  BATCH_SIZE: 16
   EPOCH: 180
   GIOU_WEIGHT: 2.0
   L1_WEIGHT: 5.0
+  SLOT_DIV_WEIGHT: 0.1
+  SLOT_ORTH_WEIGHT: 0.1
+  SLOT_BAL_WEIGHT: 0.05
   GRAD_CLIP_NORM: 0.1
   LR: 0.0001
   LR_DROP_EPOCH: 144
@@ -75,4 +93,4 @@ TEST:
   TEMPLATE_FACTOR: 2.0
   TEMPLATE_SIZE: 128
   WINDOW: true
-  NUM_TEMPLATES: 2
+  NUM_TEMPLATES: 1

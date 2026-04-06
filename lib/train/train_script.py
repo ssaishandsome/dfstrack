@@ -72,7 +72,14 @@ def run(settings):
     if settings.script_name == "dfstrack":
         focal_loss = FocalLoss()
         objective = {'giou': giou_loss, 'l1': l1_loss, 'focal': focal_loss}
-        loss_weight = {'giou': cfg.TRAIN.GIOU_WEIGHT, 'l1': cfg.TRAIN.L1_WEIGHT, 'focal': 1.}
+        loss_weight = {
+            'giou': cfg.TRAIN.GIOU_WEIGHT,
+            'l1': cfg.TRAIN.L1_WEIGHT,
+            'focal': 1.,
+            'slot_div': cfg.TRAIN.SLOT_DIV_WEIGHT,
+            'slot_orth': cfg.TRAIN.SLOT_ORTH_WEIGHT,
+            'slot_bal': cfg.TRAIN.SLOT_BAL_WEIGHT,
+        }
         actor = DFSTrackActor(net=net, objective=objective, loss_weight=loss_weight, settings=settings, cfg=cfg)
     else:
         raise ValueError("illegal script name")

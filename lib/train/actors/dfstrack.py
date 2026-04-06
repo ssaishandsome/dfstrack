@@ -1,4 +1,9 @@
 from . import BaseActor
+from lib.models.dfstrack.slot_losses import (
+    slot_attention_diversity_loss,
+    slot_balance_loss,
+    slot_orthogonality_loss,
+)
 from lib.utils.box_ops import box_cxcywh_to_xyxy, box_xywh_to_xyxy
 import torch
 from lib.utils.heapmap_utils import generate_heatmap
@@ -90,10 +95,25 @@ class DFSTrackActor(BaseActor):
         l1_loss = self.objective["l1"](pred_boxes_vec, gt_boxes_vec)
         location_loss = self.objective["focal"](pred_dict["score_map"], gt_gaussian_maps)
 
+        slot_div_loss = torch.tensor(0.0, device=l1_loss.device)
+        slot_orth_loss = torch.tensor(0.0, device=l1_loss.device)
+        slot_bal_loss = torch.tensor(0.0, device=l1_loss.device)
+
+        slot_assignment = pred_dict.get("slot_assignment", None)
+        slot_state = pred_dict.get("slot_state", None)
+        if slot_assignment is not None:
+            slot_div_loss = slot_attention_diversity_loss(slot_assignment)
+            slot_bal_loss = slot_balance_loss(slot_assignment)
+        if slot_state is not None:
+            slot_orth_loss = slot_orthogonality_loss(slot_state)
+
         loss = (
             self.loss_weight["giou"] * giou_loss
             + self.loss_weight["l1"] * l1_loss
             + self.loss_weight["focal"] * location_loss
+            + self.loss_weight.get("slot_div", 0.0) * slot_div_loss
+            + self.loss_weight.get("slot_orth", 0.0) * slot_orth_loss
+            + self.loss_weight.get("slot_bal", 0.0) * slot_bal_loss
         )
 
         if return_status:
@@ -103,6 +123,9 @@ class DFSTrackActor(BaseActor):
                 "Loss/giou": giou_loss.item(),
                 "Loss/l1": l1_loss.item(),
                 "Loss/location": location_loss.item(),
+                "Loss/slot_div": slot_div_loss.item(),
+                "Loss/slot_orth": slot_orth_loss.item(),
+                "Loss/slot_bal": slot_bal_loss.item(),
                 "IoU_main": mean_iou.item(),
             }
             return loss, status
