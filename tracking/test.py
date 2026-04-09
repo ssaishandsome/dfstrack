@@ -35,7 +35,7 @@ def run_tracker(tracker_name, tracker_param, run_id=None, dataset_name='otb', se
     checkpoints_path = ckpt_path
 
     results_dir = os.path.join(env.save_dir, tracker_param)
-    if os.path.exists(results_dir) ==False:
+    if os.path.exists(results_dir) == False:
         os.makedirs(results_dir)
     # trackers = [Tracker(tracker_name, tracker_param, dataset_name, run_id)]
 
@@ -60,7 +60,7 @@ def main():
     parser.add_argument('--tracker_param', type=str, default="dfstrack_base", help='Name of config file.')
     parser.add_argument('--runid', type=int, default=None, help='The run id.')
     parser.add_argument('--dataset_name', type=str, default="tnl2k", help='Name of dataset (lasot_lang , tnl2k, otb99_lang, lasot_extension_subset_lang, videocube_test_tiny).')
-    parser.add_argument('--ckpt_path', type=str, default="./DFSTrack_ep0180.pth.tar",
+    parser.add_argument('--ckpt_path', type=str, default="./DFSTrack_ep0174.pth.tar",
                         help='Path to the DFSTrack checkpoint.')
 
     parser.add_argument('--sequence', type=str, default=None, help='Sequence number or name.')

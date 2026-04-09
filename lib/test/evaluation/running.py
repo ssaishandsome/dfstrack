@@ -8,20 +8,61 @@ from lib.test.evaluation import Sequence, Tracker
 import torch
 
 
+def _calc_sequence_iou(pred_bb, anno_bb, target_visible=None):
+    """Compute per-frame IoU for single-object tracking results.
+
+    Args:
+        pred_bb: [T, 4] predicted boxes in xywh image coordinates.
+        anno_bb: [T, 4] ground-truth boxes in xywh image coordinates.
+        target_visible: optional [T] visibility flags.
+
+    Returns:
+        np.ndarray: [T] IoU values. Invalid frames are marked as -1.
+    """
+    pred_bb = np.asarray(pred_bb, dtype=np.float64)
+    anno_bb = np.asarray(anno_bb, dtype=np.float64)
+
+    if pred_bb.ndim == 1:
+        pred_bb = pred_bb.reshape(1, 4)
+    if anno_bb.ndim == 1:
+        anno_bb = anno_bb.reshape(1, 4)
+
+    seq_len = min(pred_bb.shape[0], anno_bb.shape[0])
+    pred_bb = pred_bb[:seq_len]
+    anno_bb = anno_bb[:seq_len]
+
+    iou = np.full(seq_len, -1.0, dtype=np.float64)
+
+    valid_gt = (anno_bb[:, 2] > 0.0) & (anno_bb[:, 3] > 0.0)
+    valid_pred = (pred_bb[:, 2] > 0.0) & (pred_bb[:, 3] > 0.0)
+    valid = valid_gt & valid_pred
+
+    if target_visible is not None:
+        target_visible = np.asarray(target_visible).astype(np.bool_)[:seq_len]
+        valid = valid & target_visible
+
+    tl = np.maximum(pred_bb[:, :2], anno_bb[:, :2])
+    br = np.minimum(pred_bb[:, :2] + pred_bb[:, 2:] - 1.0, anno_bb[:, :2] + anno_bb[:, 2:] - 1.0)
+    wh = np.clip(br - tl + 1.0, a_min=0.0, a_max=None)
+
+    intersection = wh[:, 0] * wh[:, 1]
+    union = pred_bb[:, 2] * pred_bb[:, 3] + anno_bb[:, 2] * anno_bb[:, 3] - intersection
+
+    valid = valid & (union > 0.0)
+    iou[valid] = intersection[valid] / union[valid]
+    return iou
+
+
 def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
     """Saves the output of the tracker."""
 
     if not os.path.exists(tracker.results_dir):
         print("create tracking result dir:", tracker.results_dir)
         os.makedirs(tracker.results_dir)
-    if seq.dataset in ['trackingnet', 'got10k', 'lasot', 'lasot_extension_subset', 'otb', 'uav', 'nfs', 'tnl2k']:
-        if not os.path.exists(os.path.join(tracker.results_dir, seq.dataset)):
-            os.makedirs(os.path.join(tracker.results_dir, seq.dataset))
-    '''2021.1.5 create new folder for these three datasets'''
-    if seq.dataset in ['trackingnet', 'got10k', 'lasot', 'lasot_extension_subset', 'otb', 'uav', 'nfs', 'tnl2k']:
-        base_results_path = os.path.join(tracker.results_dir, seq.dataset, seq.name)
-    else:
-        base_results_path = os.path.join(tracker.results_dir, seq.name)
+    # tracking/test.py already sets tracker.results_dir to:
+    #   env.save_dir / tracker_param / dataset_name
+    # Keep one dataset-level directory only, e.g. dfstrack_base/tnl2k/<seq>.txt.
+    base_results_path = os.path.join(tracker.results_dir, seq.name)
 
     def save_bb(file, data):
         tracked_bb = np.array(data).astype(int)
@@ -34,6 +75,10 @@ def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
     def save_score(file, data):
         scores = np.array(data).astype(float)
         np.savetxt(file, scores, delimiter='\t', fmt='%.2f')
+
+    def save_iou(file, data):
+        ious = np.array(data).astype(float)
+        np.savetxt(file, ious, delimiter='\t', fmt='%.6f')
 
     def _convert_dict(input_dict):
         data_dict = {}
@@ -98,6 +143,15 @@ def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
                 timings_file = '{}_time.txt'.format(base_results_path)
                 save_time(timings_file, data)
 
+    # Save per-frame IoU when GT is available.
+    # Keep time.txt unchanged so the existing FPS/statistics flow is not broken.
+    if seq.object_ids is None and 'target_bbox' in output and output['target_bbox'] and seq.ground_truth_rect is not None:
+        if not isinstance(output['target_bbox'][0], (dict, OrderedDict)):
+            iou_file = '{}_iou.txt'.format(base_results_path)
+            target_visible = getattr(seq, 'target_visible', None)
+            iou_values = _calc_sequence_iou(output['target_bbox'], seq.ground_truth_rect, target_visible)
+            save_iou(iou_file, iou_values)
+
 
 def run_sequence(seq: Sequence, tracker: Tracker, debug=False, num_gpu=8):
     """Runs a tracker on a sequence."""
@@ -112,12 +166,19 @@ def run_sequence(seq: Sequence, tracker: Tracker, debug=False, num_gpu=8):
 
     def _results_exist():
         if seq.object_ids is None:
-            if seq.dataset in ['trackingnet', 'got10k', 'lasot', 'lasot_extension_subset', 'otb', 'uav', 'nfs', 'tnl2k']:
-                base_results_path = os.path.join(tracker.results_dir, seq.dataset, seq.name)
-                bbox_file = '{}.txt'.format(base_results_path)
-            else:
-                bbox_file = '{}/{}.txt'.format(tracker.results_dir, seq.name)
-            return os.path.isfile(bbox_file)
+            base_results_path = os.path.join(tracker.results_dir, seq.name)
+            bbox_file = '{}.txt'.format(base_results_path)
+
+            if not os.path.isfile(bbox_file):
+                return False
+
+            # Re-run if GT is available but the per-frame IoU file has not been generated yet.
+            if seq.ground_truth_rect is not None:
+                iou_file = '{}_iou.txt'.format(base_results_path)
+                if not os.path.isfile(iou_file):
+                    return False
+
+            return True
         else:
             bbox_files = ['{}/{}_{}.txt'.format(tracker.results_dir, seq.name, obj_id) for obj_id in seq.object_ids]
             missing = [not os.path.isfile(f) for f in bbox_files]
