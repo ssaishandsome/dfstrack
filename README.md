@@ -42,3 +42,25 @@ python tracking/test.py --tracker_name dfstrack --tracker_param dfstrack_base --
 
 - `DFSTrack` first looks for a local Hugging Face style RoBERTa folder at `resource/pretrained_models/roberta-base`.
 - If that folder is missing, it falls back to `roberta-base` from Hugging Face.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+--------------------------------------------------------------------------------
+### Git有两种主要的通信协议
+其中HTTPS使用用户名和密码（现已改为个人访问令牌），所以会遇见fatal: 'https://github.com/ssaishandsome/dfstrack.git/' 鉴权失败的问题
+而SSH使用的公钥密钥对，无需每次输入密码（配置后）
+
+HTTPS：使用443端口，基于HTTP/TLS加密
+SSH：使用22端口，基于SSH协议加密

@@ -64,16 +64,16 @@ class DFSTRACK(BaseTracker):
         bbox_mask = bbox_mask.unfold(1, 16, 16).unfold(2, 16, 16)
         bbox_mask = bbox_mask.mean(dim=(-1, -2)).view(bbox_mask.shape[0], -1).unsqueeze(-1)
         bbox_mask = bbox_mask.to(template.device)
-        self.soft_token_template_mask = [bbox_mask, bbox_mask]
+        self.soft_token_template_mask = [bbox_mask] * self.num_template
 
         self.text_features, self.text_sentence_features = self.network.forward_text(
             [info["init_nlp"]],
-            num_search=1,
             device=template.device,
         )
 
         self.state = info["init_bbox"]
         self.frame_id = 0
+        self.dfs_state = {"slot_state": None, "prev_vt": None}
 
     def track(self, image, info: dict = None):
         h, w, _ = image.shape
@@ -93,9 +93,11 @@ class DFSTRACK(BaseTracker):
                 search,
                 self.soft_token_template_mask,
                 exp_str=self.text_features,
-                exp_subject_mask=self.text_sentence_features,
+                cached_text_feat=self.text_sentence_features,
+                dfs_state=self.dfs_state,
                 training=False,
             )
+        self.dfs_state = out_dict.get("dfs_state", self.dfs_state)
 
         pred_score_map = out_dict["score_map"]
         response = self.output_window * pred_score_map

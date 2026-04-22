@@ -934,41 +934,38 @@ class Fast_iTPN(BaseBackbone):
         return {'relative_position_bias_table'}
     def forward_features_pe(self, z,x,soft_token_template_mask):
         B, C, H, W = x.shape
-        z, z1 = z[0], z[1]
-        z = self.patch_embed(z)
-        z1 = self.patch_embed(z1)
+        if not isinstance(z, (list, tuple)) or len(z) == 0:
+            raise ValueError("z must be a non-empty list or tuple of template images")
+        if len(z) != len(soft_token_template_mask):
+            raise ValueError("Template image list and template mask list must have the same length")
+
+        z_list = [self.patch_embed(template) for template in z]
         x = self.patch_embed(x)
 
         for blk in self.blocks[:-self.num_main_blocks]:
             x = blk(x)
-            z = blk(z)
-            z1 = blk(z1)
+            z_list = [blk(template_feat) for template_feat in z_list]
 
         x = x.flatten(2).transpose(1, 2)
-        z = z.flatten(2).transpose(1, 2)
-        z1 = z1.flatten(2).transpose(1, 2)
+        z_list = [template_feat.flatten(2).transpose(1, 2) for template_feat in z_list]
 
         token_type_search = self.token_type_search.expand(B, x.shape[1], -1)
-        token_type_template_bg = self.token_type_template_bg.expand(B, z.shape[1], -1)
-        token_type_template_fg = self.token_type_template_fg.expand(B, z.shape[1], -1)
-
         x += token_type_search
 
-        token_type_template_fg = soft_token_template_mask[0] * token_type_template_fg
-        token_type_template_bg = (1 - soft_token_template_mask[0]) * token_type_template_bg
-        token_type_template_0 = token_type_template_fg + token_type_template_bg
-        z += token_type_template_0
+        template_token_types = []
+        conditioned_templates = []
+        for template_tokens, template_mask in zip(z_list, soft_token_template_mask):
+            token_type_template_bg = self.token_type_template_bg.expand(B, template_tokens.shape[1], -1)
+            token_type_template_fg = self.token_type_template_fg.expand(B, template_tokens.shape[1], -1)
+            token_type_template = template_mask * token_type_template_fg + (1 - template_mask) * token_type_template_bg
+            conditioned_templates.append(template_tokens + token_type_template)
+            template_token_types.append(token_type_template)
 
-        token_type_template_fg = soft_token_template_mask[1] * token_type_template_fg
-        token_type_template_bg = (1 - soft_token_template_mask[1]) * token_type_template_bg
-        token_type_template_1 = token_type_template_fg + token_type_template_bg
-        z1 += token_type_template_1
+        x = torch.cat(conditioned_templates + [x], dim=1)
 
-        x = torch.cat([z, z1, x], dim=1)
+        return x, [token_type_search] + template_token_types
 
-        return x,[token_type_search,token_type_template_0,token_type_template_1 ]
-
-    def forward_features_stage3(self, x, update_cls_token,pos_embed=None):
+    def forward_features_stage3(self, x, update_cls_token, pos_embed=None, return_last_attn=False):
         B, L, D = x.shape
         if self.cls_token is not None:
             if update_cls_token is None:
@@ -987,52 +984,54 @@ class Fast_iTPN(BaseBackbone):
         x = self.pos_drop(x)
 
         rel_pos_bias = self.rel_pos_bias() if self.rel_pos_bias is not None else None
+        if rel_pos_bias is not None and rel_pos_bias.shape[-1] != x.shape[1]:
+            rel_pos_bias = None
+        attn = None
         for blk in self.blocks[-self.num_main_blocks:]:
-            x = blk(x, rel_pos_bias)
+            if return_last_attn:
+                x, attn = blk(x, rel_pos_bias, require_attn=True)
+            else:
+                x = blk(x, rel_pos_bias)
 
         x = self.norm(x)
-        aux_dict = {"attn": None}
+        aux_dict = {"attn": attn if return_last_attn else None}
         return x, aux_dict
 
     def forward_features(self, z,x,update_cls_token,soft_token_template_mask):
         B, C, H, W = x.shape
-        z,z1 = z[0],z[1]
-        z = self.patch_embed(z)
-        z1 = self.patch_embed(z1)
+        if not isinstance(z, (list, tuple)) or len(z) == 0:
+            raise ValueError("z must be a non-empty list or tuple of template images")
+        if len(z) != len(soft_token_template_mask):
+            raise ValueError("Template image list and template mask list must have the same length")
+
+        z_list = [self.patch_embed(template) for template in z]
         x = self.patch_embed(x)
 
 
         for blk in self.blocks[:-self.num_main_blocks]:
             x =  blk(x)
-            z = blk(z)
-            z1 = blk(z1)
+            z_list = [blk(template_feat) for template_feat in z_list]
 
         x = x.flatten(2).transpose(1, 2)
-        z = z.flatten(2).transpose(1, 2)
-        z1 = z1.flatten(2).transpose(1, 2)
+        z_list = [template_feat.flatten(2).transpose(1, 2) for template_feat in z_list]
 
         token_type_search = self.token_type_search.expand(B, x.shape[1], -1)
-        token_type_template_bg = self.token_type_template_bg.expand(B, z.shape[1], -1)
-        token_type_template_fg = self.token_type_template_fg.expand(B, z.shape[1], -1)
-
         x += token_type_search
 
-        token_type_template_fg = soft_token_template_mask[0] * token_type_template_fg
-        token_type_template_bg = (1 - soft_token_template_mask[0]) * token_type_template_bg
-        z += token_type_template_fg + token_type_template_bg
-
-        token_type_template_fg = soft_token_template_mask[1] * token_type_template_fg
-        token_type_template_bg = (1 - soft_token_template_mask[1]) * token_type_template_bg
-        z1 += token_type_template_fg + token_type_template_bg
-
-        # soft_token_debug_1, soft_token_debug_2 = soft_token_template_mask[0][0,:,0].view(7,7),soft_token_template_mask[1][0,:,0].view(7,7)
+        conditioned_templates = []
+        for template_tokens, template_mask in zip(z_list, soft_token_template_mask):
+            token_type_template_bg = self.token_type_template_bg.expand(B, template_tokens.shape[1], -1)
+            token_type_template_fg = self.token_type_template_fg.expand(B, template_tokens.shape[1], -1)
+            conditioned_templates.append(
+                template_tokens + template_mask * token_type_template_fg + (1 - template_mask) * token_type_template_bg
+            )
 
         if self.cls_token is not None:
             if update_cls_token is None:
                 cls_tokens = self.cls_token.expand(B, -1, -1)
             else:
                 cls_tokens = update_cls_token
-            x = torch.cat([cls_tokens, z,z1,x], dim=1)
+            x = torch.cat([cls_tokens] + conditioned_templates + [x], dim=1)
 
         pos_embed_z = self.pos_embed_z.expand(B, -1, -1)
         pos_embed_x = self.pos_embed_x.expand(B, -1, -1)

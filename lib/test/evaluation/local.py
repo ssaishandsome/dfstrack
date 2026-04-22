@@ -13,22 +13,22 @@ def local_env_settings():
     settings.itb_path = '/data/itb'
     settings.lasot_extension_subset_path = './SOT/LaSOT-ext'
     settings.lasot_lmdb_path = '/data/lasot_lmdb'
-    settings.lasotlang_path = './SOT/LaSOT/data'
+    settings.lasotlang_path = '/mnt/Data/Lasot/images'
 
 
     settings.network_path = settings.checkpoints_path    # Where tracking networks are stored.
     settings.nfs_path = '/data/nfs'
     settings.otb_lang_path = '/data/otb_lang'
     settings.otb_path = '/data/otb'
-    settings.prj_dir = ''
+    settings.prj_dir = '/home/ssa/code/DFSTrack'
 
-    settings.result_plot_path = '/output/test/result_plots'
-    settings.results_path = '/output/test/tracking_results'    # Where to store tracking results
-    settings.save_dir = '/output'
-    settings.segmentation_path = '/output/test/segmentation_results'
+    settings.result_plot_path = './results/test/result_plots'
+    settings.results_path = './results/test'    # Where to store tracking results
+    settings.save_dir = './results/test'
+    settings.segmentation_path = './results/test/segmentation_results'
     settings.tc128_path = '/data/TC128'
     settings.tn_packed_results_path = ''
-    settings.tnl2k_path = './SOT/TNL2k/TNL2K_test_subset'
+    settings.tnl2k_path = '/mnt/Data/TNL2K/TNL2K_test'
     settings.tpl_path = ''
     settings.trackingnet_path = '/data/trackingnet'
 

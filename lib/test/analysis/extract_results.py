@@ -129,10 +129,9 @@ def extract_results(trackers, dataset, report_name, skip_missing_seq=False, plot
         target_visible = torch.tensor(seq.target_visible, dtype=torch.uint8) if seq.target_visible is not None else None
         for trk_id, trk in enumerate(trackers):
             # Load results
-            if seq.dataset in ['trackingnet', 'lasot', 'got10k', 'lasot_extension_subset', 'otb', 'uav', 'nfs', 'tnl2k']:
-                base_results_path = os.path.join(trk.results_dir, seq.dataset, seq.name)
-            else:
-                base_results_path = os.path.join(trk.results_dir, seq.name)
+            # tracking/test.py already includes the dataset name in trk.results_dir.
+            # Read from one dataset-level directory, e.g. dfstrack_base/tnl2k/<seq>.txt.
+            base_results_path = os.path.join(trk.results_dir, seq.dataset, seq.name)
             results_path = '{}.txt'.format(base_results_path)
 
             if os.path.isfile(results_path):

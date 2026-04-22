@@ -39,10 +39,14 @@ class BaseBackbone(nn.Module):
 
         search_size = to_2tuple(cfg.DATA.SEARCH.SIZE)
         template_size = to_2tuple(cfg.DATA.TEMPLATE.SIZE)
+        num_template = int(getattr(cfg.DATA.TEMPLATE, "NUMBER", 1))
+        if num_template <= 0:
+            raise ValueError("cfg.DATA.TEMPLATE.NUMBER must be positive")
         new_patch_size = cfg.MODEL.BACKBONE.STRIDE
 
         self.cat_mode = cfg.MODEL.BACKBONE.CAT_MODE
         self.return_inter = False
+        self.num_template = num_template
 
         patch_pos_embed_all = self.pos_embed
         patch_pos_embed = patch_pos_embed_all[:,1:,:]
@@ -65,7 +69,7 @@ class BaseBackbone(nn.Module):
                                                              align_corners=False)
         template_patch_pos_embed = template_patch_pos_embed.flatten(2).transpose(1, 2)
 
-        self.pos_embed_z = nn.Parameter(torch.cat([template_patch_pos_embed,template_patch_pos_embed],dim=1))
+        self.pos_embed_z = nn.Parameter(template_patch_pos_embed.repeat(1, self.num_template, 1))
         self.pos_embed_x = nn.Parameter(search_patch_pos_embed)
 
         cls_token = patch_pos_embed_all[:,0,:].unsqueeze(1)
